@@ -12,9 +12,11 @@
   Sustainability Watch - built 6 Oct 2026 for Rebecca Shutler, Sustainability
   Manager at Ogier. Holds no content: everything comes from the public GET of
   the sustainability-watch edge function (public-source summaries only, no key).
-  Source: ~/Documents/open-brain/sustainability.html. Deployed like
-  privacy.html: copied into the open-brain-catalog repo root, not part of
-  either PWA, so no service worker or SHELL_VERSION bump.
+  Source: ~/Documents/open-brain/sustainability.html. Served at
+  https://sustainability.thewishingstream.com from the public repo
+  otterstew/sustainability-watch: run ~/Documents/sustainability-watch-site/deploy.sh
+  (copies this file in as index.html and pushes). The old
+  openbrain.thewishingstream.com/sustainability.html is now only a redirect.
 -->
 <style>
   :root{
@@ -124,7 +126,7 @@
   </nav>
 
   <section id="reg">
-    <p class="blurb">Environmental and sustainability law as it develops worldwide: what is proposed, what has come into force, and the cases and judgments. Updated every morning. Offshore and financial-services items are marked priority.</p>
+    <p class="blurb">Environmental and sustainability law as it develops worldwide: what is proposed, what has come into force, and the cases and judgments. Updated most mornings. Offshore and financial-services items are marked priority.</p>
     <div class="filters">
       <button class="chip on" data-status="">All</button>
       <button class="chip" data-status="proposed">Proposed</button>
