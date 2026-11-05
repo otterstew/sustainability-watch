@@ -26,6 +26,11 @@
   Look: Otter, Stewart's design language, in the moss hue (5 Nov 2026). otter.css
   sits whole between the otter:start and otter:end markers; the app's own rules
   follow it. Behaviour and ids are as before.
+  Added 5 Nov 2026 (ideas from eco-app gamification, kept professional): an "at a
+  glance" row that doubles as filters (new since last visit, priority, dates still
+  ahead, following), Follow / Email / Copy link on each item, links straight to one
+  item (#item-<id>), and a CSV of the filtered regulation list. Follows and the
+  last-visit date live in the viewer's own browser only (localStorage), no login.
 -->
 <style>
 /* otter:start v2.1 — Otter design language. Source: ~/.claude/skills/otter-design/otter.css
@@ -446,6 +451,27 @@ td .small{font-family:var(--mono); font-size:var(--t-xs); color:var(--ink-3); ma
 .cards-m{display:none}
 .cards-m .card ul{list-style:none; padding-left:0}
 .empty{color:var(--ink-3); padding:var(--s6) 0}
+/* ── At a glance, follow, share, deep links (5 Nov 2026) ── */
+.glance{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--s3); margin:0 0 var(--s5)}
+.glance button{display:flex; flex-direction:column; align-items:flex-start; gap:var(--s1); min-height:96px; padding:var(--s4); border:0; border-radius:var(--r-lg);
+  background:var(--paper); color:var(--ink); font:inherit; text-align:left; cursor:pointer; transition:background .15s}
+.glance button:hover{background:var(--stone)}
+.glance button[aria-pressed="true"]{background:var(--accent-tint)}
+.glance button:disabled{cursor:default; opacity:.6}
+.glance button:disabled:hover{background:var(--paper)}
+.glance .o-stat__n{font-size:var(--t-2xl)}
+.glance button[aria-pressed="true"] .o-stat__n{color:var(--accent-deep)}
+.card .fresh{font-size:var(--t-xs)}
+.card.is-target{box-shadow:inset 0 0 0 1.5px var(--accent)}
+.acts{display:flex; flex-wrap:wrap; align-items:center; gap:0 var(--s4); margin-top:var(--s2)}
+.act{display:inline-flex; align-items:center; gap:var(--s1); min-height:44px; padding:0; border:0; background:none; color:var(--ink-2);
+  font:inherit; font-size:var(--t-sm); cursor:pointer; text-decoration:none}
+.act i{font-size:18px}
+.act:hover{color:var(--ink)}
+.act[aria-pressed="true"]{color:var(--accent-deep)}
+.acts .src{margin-left:auto; color:var(--accent-deep)}
+.acts .src:hover{color:var(--accent); text-decoration:underline; text-underline-offset:4px}
+@media (max-width:720px){.glance{grid-template-columns:repeat(2,minmax(0,1fr))} .glance button{min-height:84px}}
 .note{margin-top:var(--s7); line-height:1.7; max-width:72ch}
 @media (max-width:720px){
   .wrap{padding:var(--s5) var(--s4) var(--s8)}
@@ -474,6 +500,12 @@ td .small{font-family:var(--mono); font-size:var(--t-xs); color:var(--ink-3); ma
 
   <section id="reg">
     <p class="blurb o-lede">Environmental and sustainability law as it develops worldwide: what is proposed, what has come into force, and the cases and judgments. Updated every Monday. Offshore and financial-services items are marked priority.</p>
+    <div class="glance" id="glance" aria-label="At a glance">
+      <button type="button" data-g="fresh" aria-pressed="false"><span class="o-stat__n" id="g-fresh">0</span><span class="o-stat__l" id="g-fresh-l">New in the latest update</span></button>
+      <button type="button" data-g="prio" aria-pressed="false"><span class="o-stat__n" id="g-prio">0</span><span class="o-stat__l">Priority items</span></button>
+      <button type="button" data-g="ahead" aria-pressed="false"><span class="o-stat__n" id="g-ahead">0</span><span class="o-stat__l">Dates still ahead</span></button>
+      <button type="button" data-g="follow" aria-pressed="false"><span class="o-stat__n" id="g-follow">0</span><span class="o-stat__l">Following</span></button>
+    </div>
     <div class="filters">
       <button class="chip o-chip is-on" data-status="" aria-pressed="true">All</button>
       <button class="chip o-chip" data-status="proposed" aria-pressed="false">Proposed</button>
@@ -483,6 +515,7 @@ td .small{font-family:var(--mono); font-size:var(--t-xs); color:var(--ink-3); ma
       <select class="o-field" id="f-topic" aria-label="Topic"><option value="">All topics</option></select>
       <label class="tog"><input type="checkbox" id="f-prio"> Priority only</label>
       <input class="o-field" type="search" id="f-q" placeholder="Search headlines and detail" aria-label="Search">
+      <button class="o-btn o-btn--sm" id="reg-csv" type="button"><i class="ph-light ph-download-simple" aria-hidden="true"></i>Download CSV</button>
     </div>
     <div id="reg-list"></div>
   </section>
@@ -546,7 +579,22 @@ td .small{font-family:var(--mono); font-size:var(--t-xs); color:var(--ink-3); ma
   addEventListener("hashchange", () => { if (location.hash === "#carbon" || location.hash === "#reg") showTab(location.hash.slice(1)); });
 
   let REG = [], CARBON = [];
-  const f = { status: "", region: "", topic: "", prio: false, q: "" };
+  const f = { status: "", region: "", topic: "", prio: false, q: "", fresh: false, ahead: false, follow: false };
+
+  // Per-viewer conveniences, kept in this browser only: the items you follow, and
+  // when you last looked (so new items can be marked). Both survive without a login.
+  const TODAY = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD, local
+  let follows = new Set();
+  try { follows = new Set(JSON.parse(store.get("follow") || "[]")); } catch {}
+  const saveFollows = () => store.set("follow", JSON.stringify([...follows]));
+  const session = {
+    get(k) { try { return sessionStorage.getItem("sw:" + k); } catch { return null; } },
+    set(k, v) { try { sessionStorage.setItem("sw:" + k, v); } catch {} },
+  };
+  let seenBefore = null, latest = "";
+  const isFresh = (r) => seenBefore ? r.found_on > seenBefore : r.found_on === latest;
+  const isAhead = (r) => !!r.event_date && r.event_date >= TODAY;
+  const link = (r) => location.origin + location.pathname + "#item-" + r.id;
   const c = { sector: "", q: "", key: "impact_score", dir: -1 };
 
   const fmtDay = (iso) => {
@@ -559,41 +607,122 @@ td .small{font-family:var(--mono); font-size:var(--t-xs); color:var(--ink-3); ma
   };
   const fmtDate = (iso) => iso ? new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "";
 
-  function renderReg() {
+  function regRows() {
     const q = f.q.toLowerCase();
-    const rows = REG.filter((r) =>
+    return REG.filter((r) =>
       (!f.status || r.status === f.status) &&
       (!f.region || r.region === f.region) &&
       (!f.topic || (r.topics || []).includes(f.topic)) &&
       (!f.prio || r.relevance === 1) &&
+      (!f.fresh || isFresh(r)) &&
+      (!f.ahead || isAhead(r)) &&
+      (!f.follow || follows.has(r.id)) &&
       (!q || (r.headline + " " + (r.bullets || []).join(" ") + " " + r.jurisdiction).toLowerCase().includes(q)));
+  }
+
+  function renderGlance() {
+    $("#g-fresh").textContent = REG.filter(isFresh).length;
+    $("#g-fresh-l").textContent = seenBefore ? "New since your last visit" : "New in the latest update";
+    $("#g-prio").textContent = REG.filter((r) => r.relevance === 1).length;
+    $("#g-ahead").textContent = REG.filter(isAhead).length;
+    $("#g-follow").textContent = REG.filter((r) => follows.has(r.id)).length;
+    document.querySelectorAll("[data-g]").forEach((b) => b.setAttribute("aria-pressed", String(!!f[b.dataset.g])));
+  }
+
+  const card = (r) => {
+    const on = follows.has(r.id);
+    return `<article class="card" id="item-${esc(r.id)}">
+      <div class="top"><span class="badge o-chip b-${esc(r.status)}">${esc(STATUS[r.status] || r.status)}</span>
+        ${isFresh(r) ? '<span class="fresh o-chip is-on">New</span>' : ""}
+        <span class="where">${esc(r.jurisdiction)}</span>
+        ${r.relevance === 1 ? '<span class="prio">Priority</span>' : ""}</div>
+      <h3>${esc(r.headline)}</h3>
+      <ul>${(r.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>
+      <div class="foot">${r.event_date ? `<span title="${isAhead(r) ? "Date still ahead" : "Date"}">${isAhead(r) ? "Due " : ""}${esc(fmtDate(r.event_date))}</span>` : ""}
+        ${(r.topics || []).length ? `<span>${esc(r.topics.join(" · "))}</span>` : ""}</div>
+      <div class="acts">
+        <button class="act" type="button" data-act="follow" data-id="${esc(r.id)}" aria-pressed="${on}"><i class="ph-light ph-bookmark-simple" aria-hidden="true"></i>${on ? "Following" : "Follow"}</button>
+        <button class="act" type="button" data-act="email" data-id="${esc(r.id)}"><i class="ph-light ph-envelope-simple" aria-hidden="true"></i>Email</button>
+        <button class="act" type="button" data-act="copy" data-id="${esc(r.id)}"><i class="ph-light ph-link-simple" aria-hidden="true"></i>Copy link</button>
+        <a class="act src" href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener">${esc(r.source_name || "Source")} →</a>
+      </div>
+    </article>`;
+  };
+
+  function renderReg() {
+    const rows = regRows();
     $("#n-reg").textContent = REG.length || "";
+    renderGlance();
     if (!rows.length) {
-      $("#reg-list").innerHTML = `<p class="empty">${REG.length ? "Nothing matches these filters." : "No items yet. The first daily update is on its way."}</p>`;
+      const msg = !REG.length ? "No items yet. The next weekly update arrives on Monday."
+        : f.follow && !follows.size ? "You are not following anything yet. Choose Follow on an item to keep it here."
+        : f.ahead ? "No dates still ahead in these items."
+        : "Nothing matches these filters.";
+      $("#reg-list").innerHTML = `<p class="empty">${msg}</p>`;
       return;
     }
-    const byDay = new Map();
-    for (const r of rows) { if (!byDay.has(r.found_on)) byDay.set(r.found_on, []); byDay.get(r.found_on).push(r); }
     let html = "";
-    for (const [day, items] of byDay) {
-      items.sort((a, b) => a.relevance - b.relevance);
-      html += `<div class="day">${esc(fmtDay(day))}</div><div class="grid">`;
-      for (const r of items) {
-        html += `<article class="card">
-          <div class="top"><span class="badge o-chip b-${esc(r.status)}">${esc(STATUS[r.status] || r.status)}</span>
-            <span class="where">${esc(r.jurisdiction)}</span>
-            ${r.relevance === 1 ? '<span class="prio">Priority</span>' : ""}</div>
-          <h3>${esc(r.headline)}</h3>
-          <ul>${(r.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul>
-          <div class="foot">${r.event_date ? `<span>${esc(fmtDate(r.event_date))}</span>` : ""}
-            ${(r.topics || []).length ? `<span>${esc(r.topics.join(" · "))}</span>` : ""}
-            <a href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener">${esc(r.source_name || "Source")} →</a></div>
-        </article>`;
+    if (f.ahead) {
+      // Dates still ahead: one list, soonest first.
+      rows.sort((a, b) => a.event_date.localeCompare(b.event_date));
+      html = `<div class="day">Dates still <em>ahead</em>, soonest first</div><div class="grid">${rows.map(card).join("")}</div>`;
+    } else {
+      const byDay = new Map();
+      for (const r of rows) { if (!byDay.has(r.found_on)) byDay.set(r.found_on, []); byDay.get(r.found_on).push(r); }
+      for (const [day, items] of byDay) {
+        items.sort((a, b) => a.relevance - b.relevance);
+        html += `<div class="day">${esc(fmtDay(day))}</div><div class="grid">${items.map(card).join("")}</div>`;
       }
-      html += `</div>`;
     }
     $("#reg-list").innerHTML = html;
   }
+
+  // Card actions: follow, email a colleague, copy a link straight to the item.
+  const flash = (btn, words) => {
+    const was = btn.innerHTML;
+    btn.textContent = words; btn.disabled = true;
+    setTimeout(() => { btn.innerHTML = was; btn.disabled = false; }, 1800);
+  };
+  $("#reg-list").addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    const r = REG.find((x) => x.id === btn.dataset.id);
+    if (!r) return;
+    if (btn.dataset.act === "follow") {
+      follows.has(r.id) ? follows.delete(r.id) : follows.add(r.id);
+      saveFollows(); renderReg();
+    } else if (btn.dataset.act === "email") {
+      const body = [r.headline, "", ...(r.bullets || []).map((b) => "- " + b), "",
+        "Source: " + (r.source_name || "") + " " + safeUrl(r.url), "On Sustainability Watch: " + link(r), "",
+        "AI-assisted summary from public sources. Check the source before relying on it."].join("\n");
+      location.href = "mailto:?subject=" + encodeURIComponent(r.headline) + "&body=" + encodeURIComponent(body);
+    } else if (btn.dataset.act === "copy") {
+      try { await navigator.clipboard.writeText(link(r)); flash(btn, "Link copied"); }
+      catch { prompt("Copy this link", link(r)); }
+    }
+  });
+
+  // Glance figures double as filters.
+  document.querySelectorAll("[data-g]").forEach((b) => b.onclick = () => {
+    const k = b.dataset.g;
+    f[k] = !f[k];
+    if (k === "prio") $("#f-prio").checked = f.prio;
+    renderReg();
+  });
+
+  // A link to one item (#item-<id>): open the regulation tab, clear filters, and show it.
+  const showItem = () => {
+    const m = /^#item-(.+)$/.exec(location.hash);
+    if (!m || !REG.some((r) => r.id === m[1])) return;
+    showTab("reg");
+    Object.assign(f, { status: "", region: "", topic: "", prio: false, q: "", fresh: false, ahead: false, follow: false });
+    $("#f-region").value = $("#f-topic").value = $("#f-q").value = ""; $("#f-prio").checked = false;
+    document.querySelectorAll("[data-status]").forEach((x) => { const on = x.dataset.status === ""; x.classList.toggle("is-on", on); x.setAttribute("aria-pressed", String(on)); });
+    renderReg();
+    const el = document.getElementById("item-" + m[1]);
+    if (el) { el.classList.add("is-target"); el.scrollIntoView({ block: "center" }); }
+  };
+  addEventListener("hashchange", showItem);
 
   const dots = (n) => `<span class="dots" title="Impact ${n} of 5">${"●".repeat(n)}<span class="off">${"●".repeat(5 - n)}</span></span>`;
   function carbonRows() {
@@ -652,15 +781,21 @@ td .small{font-family:var(--mono); font-size:var(--t-xs); color:var(--ink-3); ma
     c.dir = c.key === k ? -c.dir : (k === "impact_score" ? -1 : 1);
     c.key = k; renderCarbon();
   });
-  $("#csv").onclick = () => {
-    const cols = ["organisation", "sector", "location", "period", "action", "method", "impact", "impact_score", "roi", "source_name", "url"];
-    const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const csv = [cols.join(","), ...carbonRows().map((r) => cols.map((k) => cell(r[k])).join(","))].join("\r\n");
+  const downloadCsv = (name, cols, rows) => {
+    const cell = (v) => `"${String(Array.isArray(v) ? v.join(" | ") : v ?? "").replace(/"/g, '""')}"`;
+    const csv = [cols.join(","), ...rows.map((r) => cols.map((k) => cell(r[k])).join(","))].join("\r\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv" }));
-    a.download = "carbon-reduction-case-studies.csv"; a.click();
+    a.download = name; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
+  $("#csv").onclick = () => downloadCsv("carbon-reduction-case-studies.csv",
+    ["organisation", "sector", "location", "period", "action", "method", "impact", "impact_score", "roi", "source_name", "url"], carbonRows());
+  // The regulation list as it is filtered on screen, for reports and board papers.
+  $("#reg-csv").onclick = () => downloadCsv(`sustainability-regulation-${TODAY}.csv`,
+    ["found_on", "status", "priority", "jurisdiction", "region", "topics", "headline", "bullets", "event_date", "following", "source_name", "url"],
+    regRows().map((r) => ({ ...r, status: STATUS[r.status] || r.status, priority: r.relevance === 1 ? "Yes" : "",
+      following: follows.has(r.id) ? "Yes" : "" })));
 
   const fill = (sel, values) => {
     for (const v of [...new Set(values)].filter(Boolean).sort()) {
@@ -670,14 +805,26 @@ td .small{font-family:var(--mono); font-size:var(--t-xs); color:var(--ink-3); ma
 
   fetch(FEED).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }).then((d) => {
     REG = d.regulatory || []; CARBON = d.carbon || [];
+    // New since last visit: keep this visit's starting point for the whole session,
+    // so a reload does not clear the marks; then remember the newest item seen.
+    latest = REG.reduce((m, r) => r.found_on > m ? r.found_on : m, "");
+    seenBefore = session.get("prev") ?? store.get("seen");
+    if (session.get("prev") === null) session.set("prev", seenBefore || "");
+    if (seenBefore === "") seenBefore = null;
+    if (latest) store.set("seen", latest);
+    // Drop follows for items no longer in the feed.
+    const ids = new Set(REG.map((r) => r.id));
+    if ([...follows].some((id) => !ids.has(id)) && REG.length) { follows = new Set([...follows].filter((id) => ids.has(id))); saveFollows(); }
     fill($("#f-region"), REG.map((r) => r.region));
     fill($("#f-topic"), REG.flatMap((r) => r.topics || []));
     fill($("#c-sector"), CARBON.map((r) => r.sector));
     const when = d.updated && d.updated.daily
       ? new Date(d.updated.daily).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
       : null;
-    $("#updated").textContent = when ? `Updated ${when}` : "Weekly regulatory digest · monthly carbon case studies";
-    renderReg(); renderCarbon();
+    // The feed's run time can be empty once old runs are tidied away; the newest item's date is the next best thing.
+    const fallback = latest ? new Date(latest + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : null;
+    $("#updated").textContent = when ? `Updated ${when}` : fallback ? `Updated ${fallback}` : "Weekly regulatory digest · monthly carbon case studies";
+    renderReg(); renderCarbon(); showItem();
   }).catch(() => {
     $("#updated").textContent = "Could not load the feed. Try again shortly.";
     $("#reg-list").innerHTML = '<p class="empty">The feed is unavailable right now.</p>';
