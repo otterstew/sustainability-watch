@@ -4,7 +4,7 @@
 # GitHub Pages; later runs just copy the latest page across and push.
 set -e
 cd "${0:A:h}"
-cp ~/Documents/open-brain/sustainability.html index.html
+cp ~/"Documents/Personal Projects/open-brain/sustainability.html" index.html
 git add -A
 git diff --cached --quiet || git commit -q -m "Update Sustainability Watch page"
 if ! gh repo view otterstew/sustainability-watch >/dev/null 2>&1; then
